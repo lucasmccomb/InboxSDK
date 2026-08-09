@@ -10,7 +10,9 @@ import ReactDOM from 'react-dom';
 import AppSidebar from '../../../../../driver-common/sidebar/AppSidebar';
 import type { PanelDescriptor } from '../../../../../driver-common/sidebar/AppSidebar';
 import type GmailDriver from '../../../gmail-driver';
-import GmailElementGetter from '../../../gmail-element-getter';
+import GmailElementGetter, {
+  COMPANION_SIDEBAR_PANEL_WRAPPER_CLASS,
+} from '../../../gmail-element-getter';
 import idMap from '../../../../../lib/idMap';
 import incrementName from '../../../../../lib/incrementName';
 import querySelector from '../../../../../lib/dom/querySelectorOrFail';
@@ -58,6 +60,12 @@ class GmailAppSidebarPrimary {
   #instanceIdsToDescriptors = new Map<string, SidebarPanelEvent>();
   #threadSidebarComponent: AppSidebar | null | undefined = null;
   #threadIconArea: HTMLElement | null | undefined = null;
+  /**
+   * Set while addCompanionThreadIconArea is still waiting for Gmail's tablist,
+   * during which the icon area isn't in the DOM yet. Lets later panels reuse
+   * the pending icon area instead of creating a duplicate.
+   */
+  #pendingThreadIconArea: HTMLElement | null = null;
   #globalIconArea: HTMLElement | null | undefined = null;
   #globalButtonContainers: Map<string, HTMLElement> = new Map();
   #threadButtonContainers: Map<string, HTMLElement> = new Map();
@@ -691,22 +699,26 @@ class GmailAppSidebarPrimary {
       this.#instanceId,
     );
 
-    // TODO: Once the changes to the GMail DOM have been entirely ramped, drop the ternary here and
-    // always get the parentElement. (Jun 20, 2018)
-    this.#companionSidebarOuterWrapper =
-      this.#companionSidebarContentContainerEl.classList.contains('bq9')
-        ? this.#companionSidebarContentContainerEl
-        : (this.#companionSidebarContentContainerEl.parentElement as any);
+    const companionSidebarOuterWrapper =
+      GmailElementGetter.getCompanionSidebarOuterWrapperElement(
+        this.#companionSidebarContentContainerEl,
+      );
 
-    if (!this.#companionSidebarOuterWrapper) {
+    if (!companionSidebarOuterWrapper) {
       throw new Error(
         'should not happen: failed to find companionSidebarOuterWrapper',
       );
     }
 
+    this.#companionSidebarOuterWrapper = companionSidebarOuterWrapper;
+
     // detect 2024-11-07 gmail update that moved sidebar icons to the right of
     // the sidebar
-    if (this.#companionSidebarOuterWrapper.classList.contains('WN9Ejb')) {
+    if (
+      this.#companionSidebarOuterWrapper.classList.contains(
+        COMPANION_SIDEBAR_PANEL_WRAPPER_CLASS,
+      )
+    ) {
       document.body.classList.add('inboxsdk__sidebar_icons_right');
       this.#driver.getLogger().eventSite('sidebar_icons_right');
     }
@@ -787,18 +799,30 @@ class GmailAppSidebarPrimary {
           let threadIconArea = (this.#threadIconArea =
             companionSidebarIconContainerEl.querySelector<HTMLElement>(
               '.sidebar_thread_iconArea',
-            ));
+            ) ?? this.#pendingThreadIconArea);
 
           if (!threadIconArea) {
-            threadIconArea = this.#threadIconArea =
-              document.createElement('div');
-            threadIconArea.className = idMap('sidebar_iconArea');
-            threadIconArea.classList.add('sidebar_thread_iconArea');
+            const newIconArea =
+              (threadIconArea =
+              this.#threadIconArea =
+                document.createElement('div'));
+            newIconArea.className = idMap('sidebar_iconArea');
+            newIconArea.classList.add('sidebar_thread_iconArea');
+            this.#pendingThreadIconArea = newIconArea;
             addCompanionThreadIconArea(
               this.#driver.getLogger(),
-              threadIconArea,
+              newIconArea,
               companionSidebarIconContainerEl,
-            );
+              () => this.#stopper.stopped,
+            )
+              .catch((err) => {
+                this.#driver.getLogger().error(err);
+              })
+              .finally(() => {
+                if (this.#pendingThreadIconArea === newIconArea) {
+                  this.#pendingThreadIconArea = null;
+                }
+              });
           }
 
           this.#addButton(threadIconArea, event, false);

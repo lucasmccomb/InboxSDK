@@ -36,6 +36,7 @@ import trackGmailStyles, {
   stylesStream,
 } from './gmail-driver/track-gmail-styles';
 import temporaryTrackDownloadUrlValidity from './gmail-driver/temporary-track-download-url-validity';
+import syncMoleSpacerWithRightColumn from './gmail-driver/sync-mole-spacer-with-right-column';
 import getGmailThreadIdForRfcMessageId from '../../driver-common/getGmailThreadIdForRfcMessageId';
 import getRfcMessageIdForGmailThreadId from './gmail-driver/get-rfc-message-id-for-gmail-thread-id';
 import getGmailMessageIdForSyncMessageId from '../../driver-common/getGmailMessageIdForSyncMessageId';
@@ -109,6 +110,7 @@ import type {
   SearchQueryRewriter,
 } from '../../namespaces/search';
 import isNotNil from '../../../common/isNotNil';
+import censorHTMLtree from '../../../common/censorHTMLtree';
 
 /**
  * @internal
@@ -270,6 +272,7 @@ class GmailDriver {
         gmailLoadEvent(this);
         overrideGmailBackButton(this, this.#gmailRouteProcessor);
         trackGmailStyles();
+        syncMoleSpacerWithRightColumn(this);
         temporaryTrackDownloadUrlValidity(this);
         if (opts.suppressAddonTitle != null) {
           suppressAddon(this, opts.suppressAddonTitle);
@@ -958,7 +961,16 @@ class GmailDriver {
     if (condition()) {
       return Kefir.constant(undefined);
     }
-    return waitFor(condition).map(() => undefined);
+    return waitFor(condition)
+      .map(() => undefined)
+      .mapErrors((err) => {
+        const el = GmailElementGetter.getCompanionSidebarColumnElement();
+        this.#logger.error(err, {
+          reason: 'waitForGlobalSidebarReady timed out',
+          aUxHtml: el ? censorHTMLtree(el) : null,
+        });
+        return err;
+      });
   }
 
   getGlobalSidebar(): GmailAppSidebarView {
